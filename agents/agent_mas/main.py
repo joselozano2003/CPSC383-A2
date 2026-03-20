@@ -45,8 +45,8 @@ def think() -> None:
          dig()
          return
 
-    if survivors:
-        target = closest_target(get_location(), survivors)
+    if survs:
+        target = closest_target_cell(get_location(), survs)
         next_loc = next_move(get_location(), target, energy) # Decide on the agent's next move while tracking the agent's energy level
         if next_loc is None:
             return  # Already recharged this round
