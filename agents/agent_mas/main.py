@@ -105,10 +105,13 @@ def a_star_search(start: Location, goal: Location):
                     came_from[adjacent] = current
     
     # Reconstruct the path backwards from goal to start
-    current = goal
     path = []
+    current = goal
     while current != start:
         path.append(current)
+        if current not in came_from:  # Safety check
+            log(f"Cannot reconstruct path from {current} to {start}")
+            return [start]  # Fallback
         current = came_from[current]
     path.append(start)
     path.reverse()
