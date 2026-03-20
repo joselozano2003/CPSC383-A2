@@ -129,6 +129,12 @@ def a_star_search(start: Location, goal: Location):
     log(path)
     return path
 
+# Finds the closest target cell using the agent's location
+def closest_target_cell(loc, targets):
+    heap = [(heuristic(loc, target), target) for target in targets]
+    heapq.heapify(heap)
+    return heapq.heappop(heap)[1]
+
 # Calculate the energy cost to travel to a survivor
 def estimate_path_cost(path):
     cost = 0
