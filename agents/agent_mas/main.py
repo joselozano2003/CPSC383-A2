@@ -1,4 +1,4 @@
-# Camila Hernandez (30134911)
+# Camila Hernandez (30134911) - T01
 # Jose Lozano
 # Matias Campuzano
 # Jose Zea
@@ -11,6 +11,11 @@ import heapq
 def think() -> None:
     """Do not remove this function, it must always be defined."""
     log("Thinking")
+
+    # Initialize variables
+    loc = get_location()
+    survs = get_survs()
+    energy = get_energy_level()
 
     # On the first round, send a request for surrounding information
     # by moving to the center (not moving). This will help initiate pathfinding.
@@ -34,12 +39,21 @@ def think() -> None:
     if isinstance(top_layer, Survivor):
         save()
         return
+    
+    # If there is rubble, dig and end thr turn.
+    if isinstance(top_layer, Rubble):
+         dig()
+         return
 
-    # The following is code from Camila's A1:
-    # Using A* search algorithm, we obtain the shortest path to the survivor.
-    path = a_star_search(get_location(), get_survs()[0])
-    if len(path) > 0:
-            move(get_location().direction_to(path[1]))
+    if survs:
+        target = closest_target_cell(get_location(), survs)
+        next_loc = next_move(get_location(), target, energy) # Decide on the agent's next move while tracking the agent's energy level
+        if next_loc is None:
+            return  # Already recharged this round
+        if isinstance(next_loc, Location):
+            move(get_location().direction_to(next_loc))
+        else:
+            move(next_loc)
 
 # The following is code from Camila's A1:
 # This function is adapted from https://www.geeksforgeeks.org/machine-learning/chebyshev-distance/
@@ -105,12 +119,69 @@ def a_star_search(start: Location, goal: Location):
                     came_from[adjacent] = current
     
     # Reconstruct the path backwards from goal to start
-    current = goal
     path = []
+    current = goal
     while current != start:
         path.append(current)
+        if current not in came_from:  # Safety check
+            log(f"Cannot reconstruct path from {current} to {start}")
+            return [start]  # Fallback
         current = came_from[current]
     path.append(start)
     path.reverse()
     log(path)
     return path
+
+# Finds the closest target cell using the agent's location
+def closest_target_cell(loc, targets):
+    heap = [(heuristic(loc, target), target) for target in targets]
+    heapq.heapify(heap)
+    return heapq.heappop(heap)[1]
+
+# Calculate the energy cost to travel to a survivor
+def estimate_path_cost(path):
+    cost = 0
+    for location in path:
+        cost += get_cell_info_at(location).move_cost
+    return cost
+
+# Calculate the nearest charging cells
+def nearest_charging_cell(loc):
+    chargers = get_charging_cells()
+    if not chargers:
+        return None
+
+    # Use a heap to find the closest charger
+    heap = [(heuristic(loc, c), c) for c in chargers]
+    heapq.heapify(heap)
+    return heapq.heappop(heap)[1]
+
+def next_move(agent_loc, target_loc, energy):
+    charging_cells = get_charging_cells()
+
+    # If the agent is standing on a charging cell and it doesn't have enough energy to reach the target cell, recharge
+    if agent_loc in charging_cells:
+        path_to_target = a_star_search(agent_loc, target_loc)
+        cost_to_target = estimate_path_cost(path_to_target)
+        if energy < cost_to_target:
+            recharge()
+            return None
+
+    # Path to target cell
+    path_to_target = a_star_search(agent_loc, target_loc)
+    cost_to_target = estimate_path_cost(path_to_target)
+
+    # If the agent has enough energy, move toward target cell
+    if energy >= cost_to_target:
+        if len(path_to_target) > 1:
+            return path_to_target[1]
+        return Direction.CENTER
+
+    # If the agent does not have enough energy, move toward the nearest charger
+    charger = nearest_charging_cell(agent_loc)
+    if charger:
+        path_to_charger = a_star_search(agent_loc, charger)
+        if path_to_charger and len(path_to_charger) > 1:
+            return path_to_charger[1]
+
+    return Direction.CENTER
