@@ -45,12 +45,15 @@ def think() -> None:
          dig()
          return
 
-    # The following is code from Camila's A1:
-    # Using A* search algorithm, we obtain the shortest path to the survivor.
-    path = a_star_search(get_location(), get_survs()[0])
-    # Move if the path has more than one location
-    if len(path) > 1:
-            move(get_location().direction_to(path[1]))
+    if survivors:
+        target = closest_target(get_location(), survivors)
+        next_loc = next_move(get_location(), target, energy) # Decide on the agent's next move while tracking the agent's energy level
+        if next_loc is None:
+            return  # Already recharged this round
+        if isinstance(next_loc, Location):
+            move(get_location().direction_to(next_loc))
+        else:
+            move(next_loc)
 
 # The following is code from Camila's A1:
 # This function is adapted from https://www.geeksforgeeks.org/machine-learning/chebyshev-distance/
