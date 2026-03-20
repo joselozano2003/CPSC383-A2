@@ -131,3 +131,14 @@ def estimate_path_cost(path):
         cost += get_cell_info_at(location).move_cost
     return cost
 
+# Calculate the nearest charging cells
+def nearest_charging_cell(loc):
+    chargers = get_charging_cells()
+    if not chargers:
+        return None
+
+    # Use a heap to find the closest charger
+    heap = [(heuristic(loc, c), c) for c in chargers]
+    heapq.heapify(heap)
+    return heapq.heappop(heap)[1]
+
