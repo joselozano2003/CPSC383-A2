@@ -142,3 +142,32 @@ def nearest_charging_cell(loc):
     heapq.heapify(heap)
     return heapq.heappop(heap)[1]
 
+def next_move(agent_loc, target_loc, energy):
+    charging_cells = get_charging_cells()
+
+    # If the agent is standing on a charging cell and it doesn't have enough energy to reach the target cell, recharge
+    if agent_loc in charging_cells:
+        path_to_target = a_star_search(agent_loc, target_loc)
+        cost_to_target = estimate_path_cost(path_to_target)
+        if energy < cost_to_target:
+            recharge()
+            return None
+
+    # Path to target cell
+    path_to_target = a_star_search(agent_loc, target_loc)
+    cost_to_target = estimate_path_cost(path_to_target)
+
+    # If the agent has enough energy, move toward target cell
+    if energy >= cost_to_target:
+        if len(path_to_target) > 1:
+            return path_to_target[1]
+        return Direction.CENTER
+
+    # If the agent does not have enough energy, move toward the nearest charger
+    charger = nearest_charging_cell(agent_loc)
+    if charger:
+        path_to_charger = a_star_search(agent_loc, charger)
+        if path_to_charger and len(path_to_charger) > 1:
+            return path_to_charger[1]
+
+    return Direction.CENTER
