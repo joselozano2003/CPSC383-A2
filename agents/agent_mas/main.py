@@ -123,3 +123,11 @@ def a_star_search(start: Location, goal: Location):
     path.reverse()
     log(path)
     return path
+
+# Calculate the energy cost to travel to a survivor
+def estimate_path_cost(path):
+    cost = 0
+    for location in path:
+        cost += get_cell_info_at(location).move_cost
+    return cost
+
