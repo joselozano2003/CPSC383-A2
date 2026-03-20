@@ -12,6 +12,11 @@ def think() -> None:
     """Do not remove this function, it must always be defined."""
     log("Thinking")
 
+    # Initialize variables
+    loc = get_location()
+    survs = get_survs()
+    energy = get_energy_level()
+
     # On the first round, send a request for surrounding information
     # by moving to the center (not moving). This will help initiate pathfinding.
     if get_round_number() == 1:
