@@ -34,6 +34,11 @@ def think() -> None:
     if isinstance(top_layer, Survivor):
         save()
         return
+    
+    # If there is rubble, dig and end thr turn.
+    if isinstance(top_layer, Rubble):
+         dig()
+         return
 
     # The following is code from Camila's A1:
     # Using A* search algorithm, we obtain the shortest path to the survivor.
