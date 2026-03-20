@@ -38,7 +38,8 @@ def think() -> None:
     # The following is code from Camila's A1:
     # Using A* search algorithm, we obtain the shortest path to the survivor.
     path = a_star_search(get_location(), get_survs()[0])
-    if len(path) > 0:
+    # Move if the path has more than one location
+    if len(path) > 1:
             move(get_location().direction_to(path[1]))
 
 # The following is code from Camila's A1:
