@@ -1,5 +1,5 @@
 # Camila Hernandez (30134911) - T01
-# Jose Lozano
+# Jose Lozano (30144736) - T01
 # Matias Campuzano
 # Jose Zea
 # Due Date: 03/27/2026
