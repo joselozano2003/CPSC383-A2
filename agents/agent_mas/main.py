@@ -1,6 +1,6 @@
 # Camila Hernandez (30134911) - T01
 # Jose Lozano (30144736) - T01
-# Matias Campuzano
+# Matias Campuzano (30144328) - T01
 # Jose Zea (30226527) - T02
 # Due Date: 03/27/2026
 # CPSC 383 (Winter 2026)
