@@ -389,3 +389,33 @@ def next_move(agent_loc, target_loc, energy):
             return path_to_charger[1]
 
     return Direction.CENTER
+
+def check_distant_rubble(rubble_loc):
+
+    # Member 3: Scans distant rubble to determine depth and survivor status.
+    # 1. Perform the scan action provided by the AEGIS stub
+    scan_result = drone_scan(rubble_loc)
+
+    if scan_result:
+        layers = scan_result.layers
+        has_survivor = scan_result.has_survivor
+
+        # 2. Log and handle the findings
+        log(f"Drone Scan at {rubble_loc}: {layers} layers, Survivor: {has_survivor}")
+
+        # 3. Update the team via Member 1's protocol
+        if has_survivor:
+            # Broadcast the need for agents based on rubble depth
+            broadcast_rubble_status(rubble_loc, layers)
+
+def broadcast_rubble_status(loc, layers):
+
+    #Notifies the team of the required workforce for a specific rubble tile.
+    x, y = loc.x, loc.y
+    if layers > 1:
+        # Request a second agent early (Challenge 3)
+        send_message(f"DIG2_REQ|{x}|{y}", [])
+    else:
+        # Standard survivor notification
+        send_message(f"SURV_FOUND|{x}|{y}|1", [])
+
