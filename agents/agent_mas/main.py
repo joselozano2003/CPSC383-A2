@@ -1,7 +1,7 @@
 # Camila Hernandez (30134911) - T01
 # Jose Lozano
 # Matias Campuzano
-# Jose Zea
+# Jose Zea (30226527) - T02
 # Due Date: 03/27/2026
 # CPSC 383 (Winter 2026)
 
@@ -39,7 +39,7 @@ def think() -> None:
     if isinstance(top_layer, Survivor):
         save()
         return
-    
+
     # If there is rubble, dig and end thr turn.
     if isinstance(top_layer, Rubble):
          dig()
@@ -79,7 +79,7 @@ def a_star_search(start: Location, goal: Location):
          Direction.NORTHWEST: 7,
          Direction.CENTER: 8
     }
-    
+
     heapq.heappush(frontier, (0, 0, start))
     came_from = {start: None}
     cost_so_far = {start: 0}
@@ -117,7 +117,7 @@ def a_star_search(start: Location, goal: Location):
                     priority = new_cost + heuristic(goal, adjacent)
                     heapq.heappush(frontier, (priority, dir_priority[direction], adjacent))
                     came_from[adjacent] = current
-    
+
     # Reconstruct the path backwards from goal to start
     path = []
     current = goal
