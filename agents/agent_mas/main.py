@@ -1,6 +1,6 @@
 # Camila Hernandez (30134911) - T01
 # Jose Lozano (30144736) - T01
-# Matias Campuzano
+# Matias Campuzano (30144328) - T01
 # Jose Zea (30226527) - T02
 # Due Date: 03/27/2026
 # CPSC 383 (Winter 2026)
@@ -419,3 +419,54 @@ def broadcast_rubble_status(loc, layers):
         # Standard survivor notification
         send_message(f"SURV_FOUND|{x}|{y}|1", [])
 
+# --- Global State for Member 3 ---
+scanned_locations = set()  # Avoid scanning the same tile twice
+
+def handle_rescue_logic(agent_loc, cell_info):
+
+    #Main logic for detecting, scanning, and clearing survivors. Called inside think().
+    top = cell_info.top_layer
+    key = loc_key(agent_loc)
+
+    # 1. ACTION: SAVE (If survivor is exposed)
+    if isinstance(top, Survivor):
+        save()
+        send_message(f"{MSG_SAVED}|{agent_loc.x}|{agent_loc.y}", [])
+        log(f"RESCUE: Saved survivor at {key}")
+        return True
+
+    # 2. ACTION: DIG (If standing on rubble)
+    if isinstance(top, Rubble):
+        # Challenge 1: Check if we need 1 or 2 agents
+        if top.agents_required == 1:
+            dig()
+            return True
+
+        # If 2 agents required, check if partner is here
+        if len(cell_info.agents) >= 2:
+            dig()
+            log(f"CO-OP DIG: Clearing heavy rubble at {key}")
+            return True
+        else:
+            # Stand still and keep requesting help
+            send_message(f"{MSG_DIG2_REQ}|{agent_loc.x}|{agent_loc.y}", [])
+            move(Direction.CENTER)
+            return True
+
+    # 3. ACTION: DRONE_SCAN (Challenge 3 - Scan distant rubble)
+    # Look for rubble in vision range that hasn't been scanned yet
+    for obs_loc, obs_cell in get_all_cells().items():
+        if isinstance(obs_cell.top_layer, Rubble):
+            obs_key = loc_key(obs_loc)
+            if obs_key not in scanned_locations:
+                # Perform the scan
+                scan_data = drone_scan(obs_loc)
+                scanned_locations.add(obs_key)
+
+                # If it's deep rubble, alert the team immediately
+                if scan_data and scan_data.layers > 1:
+                    send_message(f"{MSG_DIG2_REQ}|{obs_loc.x}|{obs_loc.y}", [])
+                    log(f"SCAN: Found heavy rubble at {obs_key}, requesting backup.")
+                return True # Drone scan counts as the turn's action
+
+    return False # No rescue actions taken
