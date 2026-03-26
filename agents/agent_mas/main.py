@@ -41,11 +41,14 @@ last_processed_round = 0    # int
 #   SAVED|x|y         — "The survivor at (x, y) has been rescued."
 #   DIG2_REQ|x|y      — "I need a second agent to dig rubble at (x, y)."
 #   DIG2_ACK|x|y|aid  — "I (agent aid) will come help dig at (x, y)."
+#   REPLAN            — "A goal changed, force re-evaluation."
 # ===========================================================================
 MSG_CLAIM    = "CLAIM"
 MSG_SAVED    = "SAVED"
 MSG_DIG2_REQ = "DIG2_REQ"
 MSG_DIG2_ACK = "DIG2_ACK"
+
+MSG_REPLAN   = "REPLAN"
 
 # How many rounds to wait for a DIG2 partner before giving up on that rubble.
 MAX_DIG2_WAIT_ROUNDS = 10
@@ -91,7 +94,14 @@ def process_messages():
         # ── CLAIM: another agent claimed a survivor target ──────────────────
         if cmd == MSG_CLAIM and len(parts) >= 3:
             key = f"{parts[1]},{parts[2]}"
-            peer_targets[key] = msg.sender_id
+            if key not in peer_targets:
+                peer_targets[key] = set()
+            peer_targets[key].add(msg.sender_id)
+
+        # ── REPLAN: A goal changed, clear target to force re-evaluation ─────
+        elif cmd == MSG_REPLAN:
+            # Drop target to force choose_best_target() to run next round
+            my_target = None
 
         # ── SAVED: a survivor was rescued — remove from tracking ────────────
         elif cmd == MSG_SAVED and len(parts) >= 3:
@@ -142,12 +152,26 @@ def choose_best_target(loc, survs):
     if not available:
         return None
 
-    unclaimed = [s for s in available if loc_key(s) not in peer_targets]
-    if unclaimed:
-        return closest_target_cell(loc, unclaimed)
+    best_surv = None
+    min_assigned = float('inf')
+    min_dist = float('inf')
 
-    # All survivors are claimed — assist the nearest one anyway.
-    return closest_target_cell(loc, available)
+    for s in available:
+        key = loc_key(s)
+        # Count how many peers are already heading to this survivor
+        assigned_count = len(peer_targets.get(key, set()))
+        dist = heuristic(loc, s)
+
+        # Target the survivor with the LEAST number of agents assigned
+        if assigned_count < min_assigned:
+            min_assigned = assigned_count
+            best_surv = s
+            min_dist = dist
+        elif assigned_count == min_assigned and dist < min_dist:
+            best_surv = s
+            min_dist = dist
+
+    return best_surv
 
 
 # ===========================================================================
@@ -185,6 +209,7 @@ def think():
         key = loc_key(loc)
         saved_locs.add(key)
         send_message(f"{MSG_SAVED}|{loc.x}|{loc.y}", [])
+        send_message(MSG_REPLAN, [])
         my_target = None
         dig2_partner_dest = None
         if key in dig2_waiting:
@@ -419,54 +444,3 @@ def broadcast_rubble_status(loc, layers):
         # Standard survivor notification
         send_message(f"SURV_FOUND|{x}|{y}|1", [])
 
-# --- Global State for Member 3 ---
-scanned_locations = set()  # Avoid scanning the same tile twice
-
-def handle_rescue_logic(agent_loc, cell_info):
-
-    #Main logic for detecting, scanning, and clearing survivors. Called inside think().
-    top = cell_info.top_layer
-    key = loc_key(agent_loc)
-
-    # 1. ACTION: SAVE (If survivor is exposed)
-    if isinstance(top, Survivor):
-        save()
-        send_message(f"{MSG_SAVED}|{agent_loc.x}|{agent_loc.y}", [])
-        log(f"RESCUE: Saved survivor at {key}")
-        return True
-
-    # 2. ACTION: DIG (If standing on rubble)
-    if isinstance(top, Rubble):
-        # Challenge 1: Check if we need 1 or 2 agents
-        if top.agents_required == 1:
-            dig()
-            return True
-
-        # If 2 agents required, check if partner is here
-        if len(cell_info.agents) >= 2:
-            dig()
-            log(f"CO-OP DIG: Clearing heavy rubble at {key}")
-            return True
-        else:
-            # Stand still and keep requesting help
-            send_message(f"{MSG_DIG2_REQ}|{agent_loc.x}|{agent_loc.y}", [])
-            move(Direction.CENTER)
-            return True
-
-    # 3. ACTION: DRONE_SCAN (Challenge 3 - Scan distant rubble)
-    # Look for rubble in vision range that hasn't been scanned yet
-    for obs_loc, obs_cell in get_all_cells().items():
-        if isinstance(obs_cell.top_layer, Rubble):
-            obs_key = loc_key(obs_loc)
-            if obs_key not in scanned_locations:
-                # Perform the scan
-                scan_data = drone_scan(obs_loc)
-                scanned_locations.add(obs_key)
-
-                # If it's deep rubble, alert the team immediately
-                if scan_data and scan_data.layers > 1:
-                    send_message(f"{MSG_DIG2_REQ}|{obs_loc.x}|{obs_loc.y}", [])
-                    log(f"SCAN: Found heavy rubble at {obs_key}, requesting backup.")
-                return True # Drone scan counts as the turn's action
-
-    return False # No rescue actions taken
