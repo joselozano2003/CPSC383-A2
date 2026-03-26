@@ -8,14 +8,15 @@
 from aegis_game.stub import *
 import heapq
 
-
-
 # The survivor/rubble location this agent is currently heading toward.
 my_target = None            # Location | None
 
-# Targets claimed by other agents: maps loc_key -> agent_id.
-# Used to avoid sending multiple agents to the same survivor.
-peer_targets = {}           # dict[str, int]
+# Tracks targets this specific agent has determined are physically unreachable.
+unreachable_targets = set() # set[str]
+
+# Tracks all active agent IDs we have heard from in the simulation.
+# Used for deterministic math to split agents evenly.
+known_agents = set()        # set[int]
 
 # Survivor locations that have already been rescued (learned via SAVED messages).
 saved_locs = set()          # set[str]
@@ -47,7 +48,6 @@ MSG_CLAIM    = "CLAIM"
 MSG_SAVED    = "SAVED"
 MSG_DIG2_REQ = "DIG2_REQ"
 MSG_DIG2_ACK = "DIG2_ACK"
-
 MSG_REPLAN   = "REPLAN"
 
 # How many rounds to wait for a DIG2 partner before giving up on that rubble.
@@ -75,7 +75,7 @@ def key_to_loc(key):
 
 def process_messages():
     """Read and process messages received from other agents."""
-    global peer_targets, saved_locs, dig2_partner_dest
+    global saved_locs, dig2_partner_dest, known_agents
     global last_processed_round, my_target
 
     current_round = get_round_number()
@@ -85,22 +85,17 @@ def process_messages():
         if msg.round_num <= last_processed_round:
             continue
 
+        # Simply by receiving ANY message, we log that this agent exists
+        known_agents.add(msg.sender_id)
+
         parts = msg.message.split("|")
         if not parts:
             continue
 
         cmd = parts[0]
 
-        # ── CLAIM: another agent claimed a survivor target ──────────────────
-        if cmd == MSG_CLAIM and len(parts) >= 3:
-            key = f"{parts[1]},{parts[2]}"
-            if key not in peer_targets:
-                peer_targets[key] = set()
-            peer_targets[key].add(msg.sender_id)
-
         # ── REPLAN: A goal changed, clear target to force re-evaluation ─────
-        elif cmd == MSG_REPLAN:
-            # Drop target to force choose_best_target() to run next round
+        if cmd == MSG_REPLAN:
             my_target = None
 
         # ── SAVED: a survivor was rescued — remove from tracking ────────────
@@ -142,34 +137,23 @@ def process_messages():
 
 def choose_best_target(loc, survs):
     """
-    Return the best survivor Location for this agent to target, or None.
-
-    Priority:
-      1. Closest survivor not yet claimed by a peer agent.
-      2. Closest survivor among all remaining (if all are claimed).
+    Member 4: Multi-Goal Planning & Agent Splitting (Challenge 4 & 5).
+    Uses agent IDs to mathematically distribute the team across all available 
+    survivors, preventing simultaneous dog-piling and saving energy.
     """
-    available = [s for s in survs if loc_key(s) not in saved_locs]
+    available = [s for s in survs if loc_key(s) not in saved_locs and loc_key(s) not in unreachable_targets]
     if not available:
         return None
 
-    best_surv = None
-    min_assigned = float('inf')
-    min_dist = float('inf')
+    # Sort survivors deterministically by coordinates
+    available.sort(key=lambda s: (s.x, s.y))
 
-    for s in available:
-        key = loc_key(s)
-        # Count how many peers are already heading to this survivor
-        assigned_count = len(peer_targets.get(key, set()))
-        dist = heuristic(loc, s)
+    # Sort all known agents
+    all_agents = sorted(list(known_agents | {get_id()}))
+    my_index = all_agents.index(get_id())
 
-        # Target the survivor with the LEAST number of agents assigned
-        if assigned_count < min_assigned:
-            min_assigned = assigned_count
-            best_surv = s
-            min_dist = dist
-        elif assigned_count == min_assigned and dist < min_dist:
-            best_surv = s
-            min_dist = dist
+    # modulo math to distribute evenly
+    best_surv = available[my_index % len(available)]
 
     return best_surv
 
@@ -180,7 +164,7 @@ def choose_best_target(loc, survs):
 
 def think():
     """Do not remove this function, it must always be defined."""
-    global my_target, dig2_partner_dest, dig2_waiting
+    global my_target, dig2_partner_dest, dig2_waiting, unreachable_targets
 
     loc    = get_location()
     energy = get_energy_level()
@@ -189,6 +173,8 @@ def think():
 
     # ── Round 1: stand still to populate adjacency info ────────────────────
     if get_round_number() == 1:
+        # Broadcast presence so agents know who is in the game for splitting
+        send_message("HELLO", [])
         move(Direction.CENTER)
         return
 
@@ -228,7 +214,6 @@ def think():
             return
 
         # Case B: rubble needs two agents — check if a partner is here.
-        # cell.agents lists all agent IDs present at this cell.
         if len(cell.agents) >= 2:
             dig()
             if key in dig2_waiting:
@@ -240,7 +225,6 @@ def think():
         if key not in dig2_waiting:
             dig2_waiting[key] = get_round_number()
         elif get_round_number() - dig2_waiting[key] >= MAX_DIG2_WAIT_ROUNDS:
-            # Waited too long — give up and re-target next round.
             log(f"[A{get_id()}] DIG2 timeout at {key}; re-targeting")
             del dig2_waiting[key]
             my_target = None
@@ -257,7 +241,6 @@ def think():
         target = key_to_loc(dig2_partner_dest)
 
         if loc == target:
-            # Arrived — stay in place so both agents see each other next round.
             move(Direction.CENTER)
         else:
             next_loc = next_move(loc, target, energy)
@@ -271,13 +254,67 @@ def think():
 
     # ── PRIORITY 4: Navigate toward a survivor target ───────────────────────
     if survs:
-        if my_target is None or loc_key(my_target) in saved_locs:
-            my_target = choose_best_target(loc, survs)
-            if my_target is not None:
+        # CONTINUOUS RE-PLANNING: Check the best target every round.
+        # This allows agents to seamlessly fan-out on Round 3 once they know all agent IDs.
+        best_target = choose_best_target(loc, survs)
+        
+        if best_target is not None:
+            # If we don't have a target, OR the math gave us a better parallel target
+            if my_target is None or loc_key(best_target) != loc_key(my_target):
+                my_target = best_target
                 send_message(f"{MSG_CLAIM}|{my_target.x}|{my_target.y}", [])
-                log(f"[A{get_id()}] Claimed target {my_target}")
+                log(f"[A{get_id()}] Split to parallel target {my_target}")
 
         if my_target is not None:
+            path_check = a_star_search(loc, my_target)
+            if len(path_check) <= 1 and loc != my_target:
+                # Only blacklist if the cell has no survivor buried under rubble.
+                # Rubble-covered survivor cells are unreachable by movement but
+                # must still be approached — agents standing adjacent can dig.
+                target_cell = get_cell_info_at(my_target)
+                target_top = target_cell.top_layer
+                if isinstance(target_top, Rubble):
+                    # Don't blacklist — we need to approach an adjacent cell and dig.
+                    # Find the nearest walkable neighbor to stand on and dig from.
+                    best_neighbor = None
+                    best_dist = float('inf')
+                    for direction in Direction:
+                        if direction == Direction.CENTER:
+                            continue
+                        neighbor = my_target.add(direction)
+                        if not on_map(neighbor):
+                            continue
+                        n_cell = get_cell_info_at(neighbor)
+                        if n_cell.is_killer_cell():
+                            continue
+                        if isinstance(n_cell.top_layer, Rubble):
+                            continue
+                        d = heuristic(loc, neighbor)
+                        if d < best_dist:
+                            best_dist = d
+                            best_neighbor = neighbor
+                    if best_neighbor is not None:
+                        # Temporarily re-target to the neighbor to get adjacent
+                        next_loc = next_move(loc, best_neighbor, energy)
+                        if next_loc is None:
+                            return
+                        if isinstance(next_loc, Location):
+                            move(loc.direction_to(next_loc))
+                        else:
+                            move(next_loc)
+                        return
+                    else:
+                        log(f"[A{get_id()}] Target {my_target} rubble with no reachable neighbor. Blacklisting.")
+                        unreachable_targets.add(loc_key(my_target))
+                        my_target = None
+                        move(Direction.CENTER)
+                        return
+                else:
+                    log(f"[A{get_id()}] Target {my_target} blocked by walls. Blacklisting.")
+                    unreachable_targets.add(loc_key(my_target))
+                    my_target = None
+                    move(Direction.CENTER)
+                    return
             next_loc = next_move(loc, my_target, energy)
             if next_loc is None:
                 return
@@ -295,14 +332,9 @@ def think():
 # PATHFINDING  (adapted from Camila's Assignment 1 submission)
 # ===========================================================================
 
-# Chebyshev distance heuristic — works for 8-directional movement.
-# Adapted from: https://www.geeksforgeeks.org/machine-learning/chebyshev-distance/
 def heuristic(a, b):
     return max(abs(a.x - b.x), abs(a.y - b.y))
 
-
-# A* search returning the full path from start to goal as a list of Locations.
-# Pseudocode reference: https://www.redblobgames.com/pathfinding/a-star/introduction.html
 def a_star_search(start, goal):
     dir_priority = {
         Direction.NORTH:     0,
@@ -361,19 +393,14 @@ def a_star_search(start, goal):
 
 
 def closest_target_cell(loc, targets):
-    """Return the target Location closest to loc using the Chebyshev heuristic."""
     heap = [(heuristic(loc, t), t) for t in targets]
     heapq.heapify(heap)
     return heapq.heappop(heap)[1]
 
-
 def estimate_path_cost(path):
-    """Sum the move costs of all cells along the given path."""
     return sum(get_cell_info_at(location).move_cost for location in path)
 
-
 def nearest_charging_cell(loc):
-    """Return the charging cell Location closest to loc, or None if none exist."""
     chargers = get_charging_cells()
     if not chargers:
         return None
@@ -389,7 +416,6 @@ def nearest_charging_cell(loc):
 def next_move(agent_loc, target_loc, energy):
     charging_cells = get_charging_cells()
 
-    # If standing on a charger and energy is insufficient to reach target, recharge.
     if agent_loc in charging_cells:
         path_to_target = a_star_search(agent_loc, target_loc)
         cost_to_target = estimate_path_cost(path_to_target)
@@ -400,13 +426,11 @@ def next_move(agent_loc, target_loc, energy):
     path_to_target = a_star_search(agent_loc, target_loc)
     cost_to_target = estimate_path_cost(path_to_target)
 
-    # Enough energy to reach the target directly.
     if energy >= cost_to_target:
         if len(path_to_target) > 1:
             return path_to_target[1]
         return Direction.CENTER
 
-    # Not enough energy — route to the nearest charger instead.
     charger = nearest_charging_cell(agent_loc)
     if charger:
         path_to_charger = a_star_search(agent_loc, charger)
@@ -416,31 +440,20 @@ def next_move(agent_loc, target_loc, energy):
     return Direction.CENTER
 
 def check_distant_rubble(rubble_loc):
-
-    # Member 3: Scans distant rubble to determine depth and survivor status.
-    # 1. Perform the scan action provided by the AEGIS stub
     scan_result = drone_scan(rubble_loc)
 
     if scan_result:
         layers = scan_result.layers
         has_survivor = scan_result.has_survivor
 
-        # 2. Log and handle the findings
         log(f"Drone Scan at {rubble_loc}: {layers} layers, Survivor: {has_survivor}")
 
-        # 3. Update the team via Member 1's protocol
         if has_survivor:
-            # Broadcast the need for agents based on rubble depth
             broadcast_rubble_status(rubble_loc, layers)
 
 def broadcast_rubble_status(loc, layers):
-
-    #Notifies the team of the required workforce for a specific rubble tile.
     x, y = loc.x, loc.y
     if layers > 1:
-        # Request a second agent early (Challenge 3)
         send_message(f"DIG2_REQ|{x}|{y}", [])
     else:
-        # Standard survivor notification
         send_message(f"SURV_FOUND|{x}|{y}|1", [])
-
