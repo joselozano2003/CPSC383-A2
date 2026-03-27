@@ -8,7 +8,6 @@
 from aegis_game.stub import *
 import heapq
 
-
 known_agents = set()        # track active agent IDs
 dig2_waiting = {}           # rubble loc_key
 saved_locs = []             # known saved survivors
@@ -91,7 +90,7 @@ def process_messages():
                 dig2_partner_dests[aid] = key
                 send_message(f"{MSG_DIG2_ACK}|{parts[1]}|{parts[2]}|{aid}", [])
 
-        # ── DIG2_ACK: a partner is coming — stop re-broadcasting ───────────
+        # ── DIG2_ACK: a partner is coming — stop re-broadcasting
         elif cmd == MSG_DIG2_ACK and len(parts) >= 4:
             key = f"{parts[1]},{parts[2]}"
             if key in dig2_waiting:
