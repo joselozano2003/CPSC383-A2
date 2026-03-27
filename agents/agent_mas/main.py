@@ -23,7 +23,7 @@ MSG_DIG2_REQ = "DIG2_REQ"
 MSG_DIG2_ACK = "DIG2_ACK"
 MSG_REPLAN   = "REPLAN"
 
-# Maximum time to wait for an agent to dig rubble before giving up
+# Max time to wait for an agent to dig rubble before giving up
 MAX_DIG2_WAIT_ROUNDS = 10
 
 # Counter for A* tie-breaking
@@ -31,15 +31,17 @@ astar_counter = 0
 
 # Helper functions
 def loc_key(loc):
-    # Convert a Location into a string
+    # Convert location into a string
     return f"{loc.x},{loc.y}"
 
 def key_to_loc(key):
-    # Convert string back into a Location
+    # Convert string back into Location
     x, y = key.split(",")
     return Location(int(x), int(y))
 
 # This function allows agents to read and process messages coming from other agents.
+# Citation: CPSC383-11MAS, Slide 21, Communication by Message Passing
+# avoiding shared memory/blackboard bottlenecks 
 def process_messages():
     global known_agents, dig2_waiting, saved_locs
 
@@ -84,17 +86,21 @@ def process_messages():
                 dig2_partner_dests[aid] = None
 
         # An agent needs the help of another agent to dig rubble.
+        # Citation: CPSC383-13MASCollectiveDecisions, Slide 16, 
+        # Using the contract net task allocation protocol
         elif cmd == MSG_DIG2_REQ and len(parts) >= 3:
             key = f"{parts[1]},{parts[2]}"
 
             # If the agent is available, it will respond by sending a message.
             if dig2_partner_dests.get(aid) is None:
+                # Citation: CPSC383-11MAS, Slides 11 & 16 
+                # Helping another agent for the main goal
                 my_targets[aid] = None 
                 dig2_partner_dests[aid] = key
                 send_message(f"{MSG_DIG2_ACK}|{parts[1]}|{parts[2]}|{aid}", [])
 
         # After an agent has responded to the dig rubble request, the other agent
-        # can stop broadcasting/waiting.
+        # can stop broadcasting waiting.
         elif cmd == MSG_DIG2_ACK and len(parts) >= 4:
             key = f"{parts[1]},{parts[2]}"
             if key in dig2_waiting:
@@ -104,6 +110,9 @@ def process_messages():
     last_processed_round[aid] = current_round
 
 # This function handles agent splitting to save all the survivors at the same time.
+# Citation: CPSC383-11MAS, Slide 6, CPSC383-13MASCollectiveDecisions, Slide 7
+# Re-evaluate the maps and distribution, 
+# Use task distribution instead of leader follow. 
 def choose_best_target(loc, survs):
     aid = get_id()
     
@@ -136,7 +145,7 @@ def choose_best_target(loc, survs):
             return candidate
         
         # Use A* search algorithm to see if the path exists from the agent's current location
-        # to the target location and obtain the shortest path to the survivor.
+        # to the target location and get the shortest path to the survivor.
         path_check = a_star_search(loc, candidate)
         
         # If the path exists, then we will target this survivor.
@@ -209,6 +218,8 @@ def think() -> None:
             return
 
         # If the rubble requires two or more agents to remove it, then they will dig together.
+        # Citation: CPSC383-11MAS, Slide 26
+        # Agents use the global round number for dig() at the same time
         if len(cell.agents) >= 2:
             dig()
             if key in dig2_waiting:
@@ -250,7 +261,7 @@ def think() -> None:
                 move(next_loc)
         return
 
-    # If survivors exist on the map, we will choose the best (closest) target to the agent to save.
+    # If survivors exist on the map, we will choose the closest target to the agent to save.
     if survs:
         best_target = choose_best_target(loc, survs)
 
@@ -270,7 +281,7 @@ def think() -> None:
                 target_cell = get_cell_info_at(curr_target)
                 if isinstance(target_cell.top_layer, Rubble) and heuristic(loc, curr_target) > 1:
                     scan_result = drone_scan(curr_target)
-                    scanned_rubble_locs.add(target_key) # Log it so we don't waste turns scanning it again
+                    scanned_rubble_locs.add(target_key)
                     
                     if scan_result:
                         log(f"[A{aid}] Drone scanned {curr_target}: {scan_result.layers} layers.")
@@ -338,10 +349,20 @@ def a_star_search(start, goal):
             # Retrieve the adjacent cell cost
             cell_cost = cell_info.move_cost
             
-            # Treat negative cells as cost 1
-            # Go through traffic jams
+            # Handle negative cells
             if cell_cost < 0:
-                cell_cost = 1
+                if len(cell_info.agents) > 0:
+                    # Another agent is here
+                    cell_cost = 1
+                elif isinstance(cell_info.top_layer, Rubble):
+                    # There might be a cost
+                    cell_cost = 15
+                elif adjacent == goal:
+                    # The goal
+                    cell_cost = 1
+                else:
+                    # Can't go here
+                    continue
 
             # Calculate the new cell cost
             new_cost  = cost_so_far[current] + cell_cost
