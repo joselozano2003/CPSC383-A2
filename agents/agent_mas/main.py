@@ -8,59 +8,55 @@
 from aegis_game.stub import *
 import heapq
 
-known_agents = set()        # track active agent IDs
-dig2_waiting = {}           # rubble loc_key
-saved_locs = []             # known saved survivors
-scanned_rubble_locs = set() # rubble locations we have already scanned
-my_targets = {}             # the current target for each agent
-dig2_partner_dests = {}     # dig partner destinations
-last_processed_round = {}   # prevent re reading messages
+# Global variables
+known_agents = set()        # Track active agent IDs
+dig2_waiting = {}           # Rubble location key
+saved_locs = []             # Known saved survivors
+scanned_rubble_locs = set() # Rubble locations we have already scanned
+my_targets = {}             # The current target for each agent
+dig2_partner_dests = {}     # Dig partner destinations
+last_processed_round = {}   # Prevent re-reading messages
 
-# ===========================================================================
-# MESSAGE PROTOCOL CONSTANTS
-# ===========================================================================
+# Message types
 MSG_SAVED    = "SAVED"
 MSG_DIG2_REQ = "DIG2_REQ"
 MSG_DIG2_ACK = "DIG2_ACK"
 MSG_REPLAN   = "REPLAN"
 
+# Maximum time to wait for an agent to dig rubble before giving up
 MAX_DIG2_WAIT_ROUNDS = 10
 
 # Counter for A* tie-breaking
 astar_counter = 0
 
-# ===========================================================================
-#  HELPERS
-# ===========================================================================
-
+# Helper functions
 def loc_key(loc):
-    """Return a hashable string key for a Location (e.g. '3,7')."""
+    # Convert a Location into a string
     return f"{loc.x},{loc.y}"
 
 def key_to_loc(key):
-    """Parse a loc_key string back into a Location."""
+    # Convert string back into a Location
     x, y = key.split(",")
     return Location(int(x), int(y))
 
-
-# ===========================================================================
-# MESSAGE PROCESSING
-# ===========================================================================
-
+# This function allows agents to read and process messages coming from other agents.
 def process_messages():
-    """Read and process messages received from other agents."""
     global known_agents, dig2_waiting, saved_locs
 
     aid = get_id()
     current_round = get_round_number()
 
+    # Initialize last processed round
     if aid not in last_processed_round:
         last_processed_round[aid] = 0
 
     for msg in read_messages():
+
+        # Skip this if a message has already been processed
         if msg.round_num <= last_processed_round[aid]:
             continue
 
+        # Track the agent who sent the message
         known_agents.add(msg.sender_id)
 
         parts = msg.message.split("|")
@@ -69,44 +65,46 @@ def process_messages():
 
         cmd = parts[0]
 
-        # ── REPLAN: A goal changed, clear target to force re-evaluation ─────
+        # After an agent has saved a survivor, we will replan by clearing
+        # the current target so the agent re-evaluates the next move.
         if cmd == MSG_REPLAN:
             my_targets[aid] = None
 
-        # ── SAVED: A survivor was secured ───────────────────────────────────
+        # When a survivor is saved, the location is marked as done.
         elif cmd == MSG_SAVED and len(parts) >= 3:
             key = f"{parts[1]},{parts[2]}"
             saved_locs.append(key)
+
+            # Clear the current target since the survivor is saved.
             if my_targets.get(aid) is not None and loc_key(my_targets[aid]) == key:
                 my_targets[aid] = None
+
+            # If an agent was moving towards the target location to dig, then we clear that location.
             if dig2_partner_dests.get(aid) == key:
                 dig2_partner_dests[aid] = None
 
-        # ── DIG2_REQ: a peer needs a second agent to dig rubble ────────────
+        # An agent needs the help of another agent to dig rubble.
         elif cmd == MSG_DIG2_REQ and len(parts) >= 3:
             key = f"{parts[1]},{parts[2]}"
+
+            # If the agent is available, it will respond by sending a message.
             if dig2_partner_dests.get(aid) is None:
                 my_targets[aid] = None 
                 dig2_partner_dests[aid] = key
                 send_message(f"{MSG_DIG2_ACK}|{parts[1]}|{parts[2]}|{aid}", [])
 
-        # ── DIG2_ACK: a partner is coming — stop re-broadcasting
+        # After an agent has responded to the dig rubble request, the other agent
+        # can stop broadcasting/waiting.
         elif cmd == MSG_DIG2_ACK and len(parts) >= 4:
             key = f"{parts[1]},{parts[2]}"
             if key in dig2_waiting:
                 del dig2_waiting[key]
 
+    # Update the last processed round
     last_processed_round[aid] = current_round
 
-
-# ===========================================================================
-# TARGET SELECTION
-# ===========================================================================
-
+# This function handles agent splitting to save all the survivors at the same time.
 def choose_best_target(loc, survs):
-    """
-    Member 4: Multi-Goal Planning & Agent Splitting (Challenge 4 & 5).
-    """
     aid = get_id()
     
     available = []
@@ -128,33 +126,36 @@ def choose_best_target(loc, survs):
     all_agents = sorted(list(known_agents | {aid}))
     my_index = all_agents.index(aid)
 
-    # Use modulo math to assign a target. If fails, try the next one.
+    # Assign targets and give each agent a different target
     for i in range(len(available)):
         target_idx = (my_index + i) % len(available)
         candidate = available[target_idx]
         
+        # If the agent is at the target location, then we will target this survivor.
         if loc == candidate:
             return candidate
-            
+        
+        # Use A* search algorithm to see if the path exists from the agent's current location
+        # to the target location and obtain the shortest path to the survivor.
         path_check = a_star_search(loc, candidate)
+        
+        # If the path exists, then we will target this survivor.
         if len(path_check) > 1:
             return candidate
 
     return None
 
-
-# ===========================================================================
-# THINK — called once per round per agent by the AEGIS framework
-# ===========================================================================
-
-def think():
+def think() -> None:
     """Do not remove this function, it must always be defined."""
+    log("Thinking")
+
     global dig2_waiting, saved_locs, scanned_rubble_locs
 
     aid = get_id()
     loc = get_location()
     energy = get_energy_level()
 
+    # Intialize agent states
     if aid not in my_targets: my_targets[aid] = None
     if aid not in dig2_partner_dests: dig2_partner_dests[aid] = None
 
@@ -171,37 +172,43 @@ def think():
     cell  = get_cell_info_at(loc)
     top   = cell.top_layer
 
-    # ── Stale target cleanup ────────────────────────────────────────────────
+    # If the rubble at that location is gone, then the agent will move on.
     if dig2_partner_dests[aid] is not None:
         t_loc = key_to_loc(dig2_partner_dests[aid])
         if not isinstance(get_cell_info_at(t_loc).top_layer, Rubble):
             dig2_partner_dests[aid] = None
 
-    # ── PRIORITY 1: Survivor is directly accessible → SAVE ─────────────────
+    # If the agent is at the cell with a survivor on it, save them.
     if isinstance(top, Survivor):
         save()
         key = loc_key(loc)
         saved_locs.append(key)
+
+        # Notify other agents
         send_message(f"{MSG_SAVED}|{loc.x}|{loc.y}", [])
         send_message(MSG_REPLAN, [])
+
+        # Reset agent state
         my_targets[aid] = None
         dig2_partner_dests[aid] = None
         
         if key in dig2_waiting:
             del dig2_waiting[key]
-            
+        
         log(f"[A{aid}] SAVED survivor at {loc}")
         return
 
-    # ── PRIORITY 2: Rubble at current location → coordinate DIG ────────────
+    # The agent is at a cell with rubble on it
     if isinstance(top, Rubble):
         rubble = top
         key    = loc_key(loc)
 
+        # If the rubble requires only one agent to remove it, the agent will dig.
         if rubble.agents_required == 1:
             dig()
             return
 
+        # If the rubble requires two or more agents to remove it, then they will dig together.
         if len(cell.agents) >= 2:
             dig()
             if key in dig2_waiting:
@@ -209,8 +216,11 @@ def think():
             log(f"[A{aid}] Cooperative DIG at {loc}")
             return
 
+        # If the required number of agents are not at the cell to dig, then the agent(s) will wait.
         if key not in dig2_waiting:
             dig2_waiting[key] = get_round_number()
+        
+        # Timeout if no other required agent comes
         elif get_round_number() - dig2_waiting[key] >= MAX_DIG2_WAIT_ROUNDS:
             log(f"[A{aid}] DIG2 timeout at {key}; re-targeting")
             del dig2_waiting[key]
@@ -218,12 +228,13 @@ def think():
             move(Direction.CENTER)
             return
 
+        # Broadcast help request to dig to other agents
         send_message(f"{MSG_DIG2_REQ}|{loc.x}|{loc.y}", [])
         move(Direction.CENTER)
         log(f"[A{aid}] Waiting for DIG2 partner at {loc}")
         return
 
-    # ── PRIORITY 3: En route as a committed DIG2 partner ───────────────────
+    # The agent will move toward the dig location if they accepted the request
     if dig2_partner_dests[aid] is not None:
         target = key_to_loc(dig2_partner_dests[aid])
 
@@ -239,10 +250,11 @@ def think():
                 move(next_loc)
         return
 
-    # ── PRIORITY 4: Navigate toward a survivor target ───────────────────────
+    # If survivors exist on the map, we will choose the best (closest) target to the agent to save.
     if survs:
         best_target = choose_best_target(loc, survs)
 
+        # Update the target survivor
         if best_target is not None:
             curr_target = my_targets[aid]
             if curr_target is None or loc_key(best_target) != loc_key(curr_target):
@@ -250,9 +262,9 @@ def think():
                 log(f"[A{aid}] Split to target {best_target}")
 
         curr_target = my_targets[aid]
+
         if curr_target is not None:
-            
-            # ── Challenge 3: Drone Scan Distant Rubble ──
+            # The agents will scan rubble from cells away before they commit to moving and digging.
             target_key = loc_key(curr_target)
             if target_key not in scanned_rubble_locs:
                 target_cell = get_cell_info_at(curr_target)
@@ -262,11 +274,13 @@ def think():
                     
                     if scan_result:
                         log(f"[A{aid}] Drone scanned {curr_target}: {scan_result.layers} layers.")
+
+                        # If there are multiple layers of rubble, the agent will send a message early for help digging.
                         if scan_result.layers > 1:
                             send_message(f"{MSG_DIG2_REQ}|{curr_target.x}|{curr_target.y}", [])
                     return 
             
-            # ── Standard Movement ──
+            # Normal agent movement
             next_loc = next_move(loc, curr_target, energy)
             if next_loc is None:
                 return
@@ -276,19 +290,19 @@ def think():
                 move(next_loc)
             return
 
-    # ── PRIORITY 5: Nothing to do — stay in place ──────────────────────────
+    # If an agent has nothing to do, they will stay in place.
     move(Direction.CENTER)
 
-
-# ===========================================================================
-# PATHFINDING (Adapted from Camila Hernandez's Assignment 1 submission)
-# ===========================================================================
-
+### Pathfinding using A* Algorithm (adapted from Camila Hernandez's Assignment 1 submission) ###
+# This function is adapted from https://www.geeksforgeeks.org/machine-learning/chebyshev-distance/
 def heuristic(a, b):
     return max(abs(a.x - b.x), abs(a.y - b.y))
 
+# This function used pseudocode from https://www.redblobgames.com/pathfinding/a-star/introduction.html
 def a_star_search(start, goal):
     global astar_counter
+
+    # Initialize frontier
     frontier = []
     
     heapq.heappush(frontier, (0, astar_counter, start))
@@ -300,42 +314,49 @@ def a_star_search(start, goal):
     while frontier:
         _, _, current = heapq.heappop(frontier)
 
+        # Checks if the goal has been reached
         if current == goal:
             break
 
+        # Check directions
         for direction in Direction:
             if direction == Direction.CENTER:
                 continue
-
+            
+            # Determine the adjacent location to the current location of the agent
             adjacent = current.add(direction)
 
+            # Skip this location if it is out of world bounds
             if not on_map(adjacent):
                 continue
-                
-            cell_info = get_cell_info_at(adjacent)
             
+            # Skip this lcoation if the cell is a killer cell
+            cell_info = get_cell_info_at(adjacent)
             if cell_info.is_killer_cell():
                 continue
 
+            # Retrieve the adjacent cell cost
             cell_cost = cell_info.move_cost
             
-            # treat negative cells as cost 1
-            # go through traffic jams
+            # Treat negative cells as cost 1
+            # Go through traffic jams
             if cell_cost < 0:
                 cell_cost = 1
 
+            # Calculate the new cell cost
             new_cost  = cost_so_far[current] + cell_cost
 
+            # If the adjacent cell is new or cheaper, the cost, priority and where it came from
+            # will be updated
             if adjacent not in cost_so_far or new_cost < cost_so_far[adjacent]:
                 cost_so_far[adjacent] = new_cost
                 priority = new_cost + heuristic(goal, adjacent)
-                
                 heapq.heappush(frontier, (priority, astar_counter, adjacent))
                 astar_counter += 1
-                
                 came_from[adjacent] = current
 
-    path    = []
+    # Reconstruct the path backwards from goal to start
+    path = []
     current = goal
     while current != start:
         path.append(current)
@@ -346,12 +367,14 @@ def a_star_search(start, goal):
     path.reverse()
     return path
 
-
+# This function picks the closest target cell using the heuristic.
 def closest_target_cell(loc, targets):
     heap = [(heuristic(loc, t), t) for t in targets]
     heapq.heapify(heap)
     return heapq.heappop(heap)[1]
 
+# This fucntion estimates the energy cost to follow a path using
+# the move cost of each cell.
 def estimate_path_cost(path):
     cost = 0
     for location in path:
@@ -359,6 +382,8 @@ def estimate_path_cost(path):
         cost += 1 if c < 0 else c
     return cost
 
+# This function returns the nearest charging cell locations using the
+# heuristic, or returns nothing if no charging cells exist on the map.
 def nearest_charging_cell(loc):
     chargers = get_charging_cells()
     if not chargers:
@@ -367,14 +392,12 @@ def nearest_charging_cell(loc):
     heapq.heapify(heap)
     return heapq.heappop(heap)[1]
 
-
-# ===========================================================================
-# ENERGY-AWARE MOVEMENT (Adapted from Camila Hernandez's Assignment 1 submission)
-# ===========================================================================
-
+# This function decides the next move for each agent while avoiding running out of energy.
 def next_move(agent_loc, target_loc, energy):
     charging_cells = get_charging_cells()
 
+    # If the agent is on a charging cell, the agent can recharge if the calculated cost to the
+    # target cell is greater than their current energy.
     if agent_loc in charging_cells:
         path_to_target = a_star_search(agent_loc, target_loc)
         cost_to_target = estimate_path_cost(path_to_target)
@@ -382,14 +405,18 @@ def next_move(agent_loc, target_loc, energy):
             recharge()
             return None
 
+    # Calculate the path to the target cell and its cost
     path_to_target = a_star_search(agent_loc, target_loc)
     cost_to_target = estimate_path_cost(path_to_target)
 
+    # If the agent has enough energy, then it will move towards the target.
     if energy >= cost_to_target:
         if len(path_to_target) > 1:
             return path_to_target[1]
         return Direction.CENTER
 
+    # If the agent is running low on energy and cannot make it to the target cell,
+    # it will go to the nearest charging cell.
     charger = nearest_charging_cell(agent_loc)
     if charger:
         path_to_charger = a_star_search(agent_loc, charger)
