@@ -282,7 +282,7 @@ def think():
 
 
 # ===========================================================================
-# PATHFINDING
+# PATHFINDING (Adapted from Camila Hernandez's Assignment 1 submission)
 # ===========================================================================
 
 def heuristic(a, b):
@@ -370,7 +370,7 @@ def nearest_charging_cell(loc):
 
 
 # ===========================================================================
-# ENERGY-AWARE MOVEMENT
+# ENERGY-AWARE MOVEMENT (Adapted from Camila Hernandez's Assignment 1 submission)
 # ===========================================================================
 
 def next_move(agent_loc, target_loc, energy):
